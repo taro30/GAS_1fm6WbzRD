@@ -27,19 +27,22 @@ function sendWeeklyReport() {
         // 3. カテゴリー集計
         const thisStats = aggregateStats(thisEvents);
         const lastStats = aggregateStats(lastEvents);
-        const comparison = buildComparison(thisStats, lastStats);
 
-        // 4. グラフ生成 (シートを使わないDataTable方式)
+        // 4. 分析データの構築（構成比・インアウト比を含む）
+        const comparison = buildComparison(thisStats, lastStats);
+        const ioMetrics = calculateIOMetrics(thisStats);
+
+        // 5. グラフ生成 (シートを使わないDataTable方式)
         const chartBlob = createChartImage(thisEvents, thisWeek.start);
 
-        // 5. AI分析の取得
-        const aiInsight = getGeminiAnalysis(comparison);
+        // 6. AI分析の取得
+        const aiInsight = getGeminiAnalysis(comparison, ioMetrics);
 
-        // 6. メール送信
+        // 7. メール送信
         const dateRangeStr = formatDate(thisWeek.start) + " ～ " + formatDate(thisWeek.end);
         const subject = "[週次レポート] カレンダー実績集計 (" + dateRangeStr + ")";
 
-        sendHtmlEmail(subject, comparison, aiInsight, chartBlob, dateRangeStr);
+        sendHtmlEmail(subject, comparison, ioMetrics, aiInsight, chartBlob, dateRangeStr);
 
     } catch (e) {
         console.error("実行エラー: " + e.message);
@@ -92,10 +95,34 @@ function aggregateStats(events) {
 }
 
 /**
+ * インプット・アウトプット比率の計算
+ */
+function calculateIOMetrics(stats) {
+    let inputHours = 0;
+    let outputHours = 0;
+
+    Object.keys(stats).forEach(cat => {
+        if (cat.includes("インプット")) {
+            inputHours += stats[cat].hours;
+        } else if (cat.includes("アウトプット") || cat === "中小") { // 「中小」もアウトプット活動とみなす（必要に応じて調整）
+            outputHours += stats[cat].hours;
+        }
+    });
+
+    const totalIO = inputHours + outputHours;
+    return {
+        inputHours: inputHours,
+        outputHours: outputHours,
+        inputRatio: totalIO > 0 ? (inputHours / totalIO * 100).toFixed(1) : 0,
+        outputRatio: totalIO > 0 ? (outputHours / totalIO * 100).toFixed(1) : 0
+    };
+}
+
+/**
  * グラフ用の画像生成 (シートを使わない方式)
  */
 function createChartImage(events, weekStart) {
-    const dailyData = {}; // { MM/dd: { cat: hours } }
+    const dailyData = {};
     const catSet = new Set();
 
     events.forEach(ev => {
@@ -110,16 +137,14 @@ function createChartImage(events, weekStart) {
             else if (typeof ev.duration === 'number') h = ev.duration * 24;
 
             if (!dailyData[ds]) dailyData[ds] = {};
-            dailyData[ds][cat] = (dailyMap = dailyData[ds][cat] || 0) + h;
+            dailyData[ds][cat] = (dailyData[ds][cat] || 0) + h;
         }
     });
 
     const categories = Array.from(catSet).sort();
     if (categories.length === 0) return null;
 
-    // DataTableの構築
-    const dataTable = Charts.newDataTable()
-        .addColumn(Charts.ColumnType.STRING, "日付");
+    const dataTable = Charts.newDataTable().addColumn(Charts.ColumnType.STRING, "日付");
     categories.forEach(c => dataTable.addColumn(Charts.ColumnType.NUMBER, c));
 
     for (let i = 0; i < 7; i++) {
@@ -131,11 +156,10 @@ function createChartImage(events, weekStart) {
         dataTable.addRow(row);
     }
 
-    // グラフ構築 (シート不要)
     const chart = Charts.newColumnChart()
         .setDataTable(dataTable.build())
         .setStacked()
-        .setTitle('日次活動配分 (時間)')
+        .setTitle('日次カテゴリー別 時間配分 (時間)')
         .setXAxisTitle('日付')
         .setYAxisTitle('時間(h)')
         .setDimensions(600, 400)
@@ -149,21 +173,20 @@ function createChartImage(events, weekStart) {
 /**
  * Gemini分析
  */
-function getGeminiAnalysis(comparison) {
+function getGeminiAnalysis(comparison, ioMetrics) {
     const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
     if (!key) return "※AI寸評はAPIキー未設定のため表示されません。";
 
     const endpoint = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=" + key;
     const prompt = `あなたはライフログ分析のプロフェッショナルAIです。
-以下の集計データを分析し、ユーザーの今週の生活リズムと質の変化について【350文字〜400文字程度】で詳しく日本語のアドバイスを記述してください。
+以下の集計データ（活動構成比、インプット/アウトプット比率含む）を多角的に分析し、ユーザーの今週の生活リズムと質の変化について【350文字〜450文字程度】で詳しく日本語のアドバイスを記述してください。
 
-着眼点：
-- カテゴリー別の「時間(h)」の変化（何が増え、何が減ったか）。
-- ワークライフバランスの観点からの気づき（仕事、学習、休息の偏り）。
-- データから読み取れるユーザーの頑張りや、来週に向けた具体的な提案。
-- 温かみがあり、かつ客観的な洞察に満ちたトーンで答えてください。
+特に以下の3点に触れてください：
+1. 全体時間に対する各カテゴリーの構成比から、時間の使い方の「偏り」や「理想とのギャップ」を考察。
+2. インプット(${ioMetrics.inputRatio}%) vs アウトプット(${ioMetrics.outputRatio}%)の比率に対する専門的な洞察（黄金比3:7等と比較）。
+3. 前週比データから読み取れる、ユーザーのポジティブな変化や改善に向けた具体的なアクション案。
 
-データ: ${JSON.stringify(comparison)}`;
+データ: ${JSON.stringify({ comparison, ioMetrics })}`;
 
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const options = { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
@@ -177,18 +200,24 @@ function getGeminiAnalysis(comparison) {
 }
 
 /**
- * データ比較
+ * データ比較および構成比の算出
  */
 function buildComparison(thisStats, lastStats) {
     const keys = new Set([...Object.keys(thisStats), ...Object.keys(lastStats)]);
+    let totalHours = 0;
+    Object.keys(thisStats).forEach(k => totalHours += thisStats[k].hours);
+
     const res = [];
     keys.forEach(k => {
         const t = thisStats[k] || { count: 0, hours: 0 };
         const l = lastStats[k] || { count: 0, hours: 0 };
+        const ratio = totalHours > 0 ? (t.hours / totalHours * 100).toFixed(1) : 0;
+
         res.push({
             category: k,
             curCount: t.count,
             curHours: t.hours,
+            ratio: ratio,
             diffHours: t.hours - l.hours
         });
     });
@@ -198,7 +227,7 @@ function buildComparison(thisStats, lastStats) {
 /**
  * メール送信
  */
-function sendHtmlEmail(subject, comparison, aiText, chartBlob, dateRange) {
+function sendHtmlEmail(subject, comparison, ioMetrics, aiText, chartBlob, dateRange) {
     const email = Session.getActiveUser().getEmail();
 
     let table = "";
@@ -207,7 +236,7 @@ function sendHtmlEmail(subject, comparison, aiText, chartBlob, dateRange) {
         const c = item.diffHours > 0 ? "#4285F4" : (item.diffHours < 0 ? "#EA4335" : "#333");
         table += `<tr><td style="border:1px solid #ddd;padding:10px;font-weight:bold;">【${item.category}】</td>` +
             `<td style="border:1px solid #ddd;padding:10px;text-align:center;">${item.curCount}回</td>` +
-            `<td style="border:1px solid #ddd;padding:10px;text-align:center;">${item.curHours.toFixed(1)}h</td>` +
+            `<td style="border:1px solid #ddd;padding:10px;text-align:center;">${item.curHours.toFixed(1)}h (${item.ratio}%)</td>` +
             `<td style="border:1px solid #ddd;padding:10px;text-align:center;color:${c};">${item.diffHours > 0 ? '+' : ''}${d}h</td></tr>`;
     });
 
@@ -218,11 +247,17 @@ function sendHtmlEmail(subject, comparison, aiText, chartBlob, dateRange) {
     const html = `
     <div style="font-family:sans-serif;max-width:650px;margin:0 auto;padding:25px;color:#333;background-color:#fff;line-height:1.7;">
       <h2 style="color:#4285F4;border-bottom:3px solid #4285F4;padding-bottom:10px;">週次ライフログ・レポート</h2>
-      <p style="font-size:1.1em;">[対象期間] ${dateRange}</p>
+      <p style="font-size:1.1em; margin-bottom: 25px;">[対象期間] ${dateRange}</p>
       
-      <h3 style="background:#f8f9fa;padding:10px;border-left:5px solid #ccc;margin-top:25px;">● カテゴリー別実績</h3>
-      <table style="border-collapse:collapse;width:100%;margin-top:10px;">
-        <tr style="background:#eee;"><th style="border:1px solid #ddd;padding:12px;text-align:left;">カテゴリー</th><th>回数</th><th>時間(h)</th><th>前週比</th></tr>
+      <div style="background:#f8f9fa; padding:15px; border-radius:8px; margin-bottom:30px; border-left:5px solid #FF9800;">
+        <h4 style="margin:0 0 10px 0; color:#E65100;">■ インプット・アウトプット比率</h4>
+        目指せ 黄金比 3:7<br>
+        <span style="font-size:1.2em; font-weight:bold;">インプット ${ioMetrics.inputRatio}% (${ioMetrics.inputHours.toFixed(1)}h) : アウトプット ${ioMetrics.outputRatio}% (${ioMetrics.outputHours.toFixed(1)}h)</span>
+      </div>
+
+      <h3 style="background:#f8f9fa;padding:10px;border-left:5px solid #ccc;margin-top:25px;">● カテゴリー別実績 (構成比含む)</h3>
+      <table style="border-collapse:collapse;width:100%;margin-top:10px; font-size:0.95em;">
+        <tr style="background:#eee;"><th style="border:1px solid #ddd;padding:12px;text-align:left;">カテゴリー</th><th>回数</th><th>時間(構成比)</th><th>前週比</th></tr>
         ${table}
       </table>
       ${chartImg}
