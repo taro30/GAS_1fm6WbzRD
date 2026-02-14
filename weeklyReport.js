@@ -150,8 +150,8 @@ function getGeminiCommentary(comparison) {
     const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
     if (!apiKey) return "※AI寸評はAPIキー未設定のためスキップされました。";
 
-    // Update to gemini-2.0-flash as 1.5 might be deprecated in this environment/time
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    // Use gemini-1.5-flash-latest as it is more widely available in free tier
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
 
     const prompt = `あなたは生活習慣の分析をサポートするAIです。
 以下のカレンダー集計データ（今週の件数と前週比）を見て、傾向や示唆を100文字以内の日本語で述べてください。
