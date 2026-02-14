@@ -117,35 +117,49 @@ function compareWeeklyStats(current, previous) {
  */
 function generateStackedDailyChart(sheet, start, end) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const tmpSheet = ss.insertSheet('_tmp_chart');
+    const tmpSheetName = `_tmp_chart_${new Date().getTime()}`;
+    const tmpSheet = ss.insertSheet(tmpSheetName);
 
     try {
         const data = sheet.getDataRange().getValues();
+        if (data.length <= 1) return null; // No data
+
         const categoriesSet = new Set();
-        const dailyData = {}; // { YYYY/MM/DD: { category: duration } }
+        const dailyData = {}; // { MM/dd: { category: duration } }
 
         // 1. Collect Categories and Daily Totals
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
+            if (row.length < 6) continue; // Skip rows that don't reach Column F (Date)
+
             const title = String(row[0]);
             const eventDate = new Date(row[5]);
             const durationRaw = row[3];
+
+            if (isNaN(eventDate.getTime())) continue; // Skip invalid dates
 
             const match = title.match(/【(.*?)】/);
             if (match && eventDate >= start && eventDate <= end) {
                 const cat = match[1];
                 const dateStr = Utilities.formatDate(eventDate, 'JST', 'MM/dd');
-                const duration = (durationRaw instanceof Date)
-                    ? (durationRaw.getHours() + durationRaw.getMinutes() / 60)
-                    : (typeof durationRaw === 'number' ? durationRaw * 24 : 0);
+
+                // Duration calculation (handling both Time object and Serial number)
+                let durationHours = 0;
+                if (durationRaw instanceof Date) {
+                    durationHours = durationRaw.getHours() + (durationRaw.getMinutes() / 60);
+                } else if (typeof durationRaw === 'number') {
+                    durationHours = durationRaw * 24;
+                }
 
                 categoriesSet.add(cat);
                 if (!dailyData[dateStr]) dailyData[dateStr] = {};
-                dailyData[dateStr][cat] = (dailyData[dateStr][cat] || 0) + duration;
+                dailyData[dateStr][cat] = (dailyData[dateStr][cat] || 0) + durationHours;
             }
         }
 
         const categories = Array.from(categoriesSet);
+        if (categories.length === 0) return null; // No categories found, skip chart
+
         const header = ["Date", ...categories];
         const rows = [];
 
@@ -161,25 +175,27 @@ function generateStackedDailyChart(sheet, start, end) {
             rows.push(row);
         }
 
+        // Write data to tmp sheet
         tmpSheet.getRange(1, 1, 1, header.length).setValues([header]);
-        if (rows.length > 0) {
-            tmpSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
-        }
+        tmpSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
 
         // 3. Create Stacked Column Chart
         const chart = tmpSheet.newChart()
             .setChartType(Charts.ChartType.COLUMN)
             .addRange(tmpSheet.getRange(1, 1, rows.length + 1, header.length))
             .setOption('isStacked', true)
-            .setOption('title', 'Weekly Activity Distribution (Hours)')
+            .setOption('title', 'Weekly Activity Allocation (Hours)')
             .setOption('hAxis.title', 'Day')
             .setOption('vAxis.title', 'Hours')
             .setOption('legend', { position: 'right' })
             .setOption('backgroundColor', '#fdfdfd')
             .build();
 
-        return chart.getAs('image/png').setName('stacked_weekly_chart.png');
+        return chart.getAs('image/png').setName('weekly_activity_chart.png');
 
+    } catch (err) {
+        console.error("Chart Generation Error: " + err.message);
+        return null; // Fallback to email without chart
     } finally {
         ss.deleteSheet(tmpSheet);
     }
@@ -230,6 +246,10 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
       </tr>`;
     });
 
+    const inlineImages = chartBlob ? { chart: chartBlob } : {};
+    const attachments = chartBlob ? [chartBlob] : [];
+    const chartImgTag = chartBlob ? `<div style="margin-top: 25px;"><img src="cid:chart" style="width: 100%; max-width: 600px; border: 1px solid #eee; border-radius: 8px;" /></div>` : "";
+
     const htmlBody = `
     <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; color: #333;">
       <h2 style="color: #4285F4; border-bottom: 2px solid #4285F4; padding-bottom: 10px;">週次ライフログ・レポート</h2>
@@ -250,9 +270,7 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
         </tbody>
       </table>
 
-      <div style="margin-top: 25px;">
-        <img src="cid:chart" style="width: 100%; max-width: 600px; border: 1px solid #eee; border-radius: 8px;" />
-      </div>
+      ${chartImgTag}
 
       <h3 style="margin-top: 30px; display: flex; align-items: center;">
         <span style="font-size: 1.5em; margin-right: 10px;">💡</span> AI Insight (Gemini)
@@ -269,8 +287,8 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
 
     GmailApp.sendEmail(userEmail, subject, "", {
         htmlBody: htmlBody,
-        inlineImages: { chart: chartBlob },
-        attachments: [chartBlob]
+        inlineImages: inlineImages,
+        attachments: attachments
     });
 }
 
