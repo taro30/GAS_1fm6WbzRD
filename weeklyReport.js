@@ -66,6 +66,7 @@ function aggregateWeeklyStats(sheet, start, end) {
 
     for (let i = 1; i < data.length; i++) {
         const row = data[i];
+        if (row.length < 6) continue;
         const title = String(row[0]); // Col A: Title
         const eventDate = new Date(row[5]); // Col F: Date
         const durationRaw = row[3]; // Col D: Duration (Time object or number)
@@ -124,11 +125,10 @@ function generateStackedDailyChart(sheet, start, end) {
         const data = sheet.getDataRange().getValues();
         if (data.length <= 1) return null;
 
-        // User defined categories from spreadsheet/chart legend
-        const categories = ["休憩", "雑務・MTG", "生活", "仕事", "インプット", "アウトプット", "中小"];
+        const categoriesSet = new Set();
         const dailyData = {}; // { MM/dd: { category: duration } }
 
-        // 1. Collect Daily Totals for target categories
+        // 1. Collect Categories and Daily Totals (Dynamically from data)
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
             if (row.length < 6) continue;
@@ -151,10 +151,14 @@ function generateStackedDailyChart(sheet, start, end) {
                     durationHours = durationRaw * 24;
                 }
 
+                categoriesSet.add(cat);
                 if (!dailyData[dateStr]) dailyData[dateStr] = {};
                 dailyData[dateStr][cat] = (dailyData[dateStr][cat] || 0) + durationHours;
             }
         }
+
+        const categories = Array.from(categoriesSet).sort();
+        if (categories.length === 0) return null;
 
         const header = ["Date", ...categories];
         const rows = [];
@@ -171,11 +175,9 @@ function generateStackedDailyChart(sheet, start, end) {
             rows.push(row);
         }
 
-        // Write data explicitly
         tmpSheet.getRange(1, 1, 1, header.length).setValues([header]);
         tmpSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
 
-        // Final check on written data range
         const dataRange = tmpSheet.getRange(1, 1, rows.length + 1, header.length);
 
         // 3. Create Stacked Column Chart
@@ -187,23 +189,21 @@ function generateStackedDailyChart(sheet, start, end) {
             .setOption('hAxis.title', 'Day')
             .setOption('vAxis.title', 'Hours')
             .setOption('legend', { position: 'right' })
-            .setOption('backgroundColor', '#fdfdfd')
-            // Match spreadsheet colors as much as possible
-            .setOption('colors', ['#4285F4', '#993300', '#F4E7B1', '#673AB7', '#00C853', '#FF9800', '#FF5722'])
+            .setOption('backgroundColor', '#ffffff')
             .build();
 
         return chart.getAs('image/png').setName('weekly_activity_chart.png');
 
     } catch (err) {
         console.error("Chart Generation Error: " + err.message);
-        return null; // Fallback to email without chart
+        return null;
     } finally {
         ss.deleteSheet(tmpSheet);
     }
 }
 
 /**
- * Calls Gemini for commentary.
+ * Calls Gemini for commentary (Increasing length to 200-300 chars).
  */
 function getGeminiCommentary(comparison) {
     const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
@@ -211,7 +211,8 @@ function getGeminiCommentary(comparison) {
 
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const prompt = `あなたは生活習慣の分析をサポートするAIです。
-以下のカレンダー集計データ（今週の件数・累計時間・前週比）を見て、傾向や示唆を100文字以内の日本語で述べてください。
+以下のカレンダー集計データ（今週の件数・累計時間・前週比）を見て、傾向や示唆を【250文字〜300文字程度のボリューム】で、詳しく日本語で述べてください。
+単なる数値の羅列ではなく、活動のバランスや変化から読み取れるライフスタイルの傾向を、優しく寄り添うトーンで分析してください。
 断定や強い評価は避け、「〜の傾向が見られます」「〜が示唆されます」といった表現を使ってください。
 
 データ:
@@ -227,7 +228,7 @@ ${JSON.stringify(comparison)}
 }
 
 /**
- * Sends HTML Email.
+ * Sends HTML Email (Removed emojis to prevent ???? issue).
  */
 function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) {
     const userEmail = Session.getActiveUser().getEmail();
@@ -253,17 +254,17 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
 
     const htmlBody = `
     <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; color: #333;">
-      <h2 style="color: #4285F4; border-bottom: 2px solid #4285F4; padding-bottom: 10px;">週次ライフログ・レポート</h2>
-      <p style="font-weight: bold;">📅 対象期間: <span style="color: #555;">${dateRange}</span></p>
+      <h2 style="color: #4285F4; border-bottom: 2px solid #4285F4; padding-bottom: 10px;">Weekly Life Log Report</h2>
+      <p style="font-weight: bold;">[Target Period] <span style="color: #555;">${dateRange}</span></p>
       
-      <h3>📊 今週の活動サマリー</h3>
+      <h3>(Summary) Activity Statistics</h3>
       <table style="border-collapse: collapse; width: 100%; border: 1px solid #ddd;">
         <thead>
           <tr style="background-color: #f8f9fa; border-bottom: 2px solid #ddd;">
-            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">カテゴリー</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">回数</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">累計時間</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">前週比(時間)</th>
+            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Category</th>
+            <th style="padding: 10px; border: 1px solid #ddd;">Count</th>
+            <th style="padding: 10px; border: 1px solid #ddd;">Total Time</th>
+            <th style="padding: 10px; border: 1px solid #ddd;">Vs Prev Week</th>
           </tr>
         </thead>
         <tbody>
@@ -273,15 +274,15 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
 
       ${chartImgTag}
 
-      <h3 style="margin-top: 30px; display: flex; align-items: center;">
-        <span style="font-size: 1.5em; margin-right: 10px;">💡</span> AI Insight (Gemini)
+      <h3 style="margin-top: 30px;">
+        AI Insight (Gemini)
       </h3>
       <div style="background-color: #f1f3f4; padding: 20px; border-radius: 8px; border-left: 6px solid #4285F4; line-height: 1.6;">
-        ${aiCommentary}
+        ${aiCommentary.replace(/\n/g, '<br>')}
       </div>
 
       <footer style="margin-top: 40px; padding-top: 10px; border-top: 1px solid #eee; font-size: 0.8em; color: #888; text-align: center;">
-        このメールは自動送信されています。今日も良い一日を！
+        This email is automatically generated. Have a great day!
       </footer>
     </div>
   `;
