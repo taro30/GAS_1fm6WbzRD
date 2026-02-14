@@ -285,14 +285,13 @@ function sendHtmlEmail(subject, comparison, ioMetrics, aiText, chartBlob, dateRa
  */
 function getWeeklyDateRange(refDate, offsetWeeks) {
     const d = new Date(refDate.getTime());
-    const day = d.getDay(); // 0: 日, 1: 月...
+    const day = d.getDay(); // 0:日, 6:土
 
-    // 今週の日曜日の日付を取得
-    const todaySunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - day, 0, 0, 0);
+    // 直近または本日の週の「日曜日」を特定する
+    // 本日が日曜日(0)の場合、日曜朝のレポート（先週分の集計）のために7日前を基準にする
+    const diffToSunday = (day === 0) ? 7 : day;
 
-    // offsetWeeks = 0 のとき「直近の完結した一週間（先週の日曜～昨日の土曜）」
-    // 日曜に実行された場合、todaySunday = 今日。そこから -7日して先週の日曜を始点にする。
-    const start = new Date(todaySunday.getFullYear(), todaySunday.getMonth(), todaySunday.getDate() + (offsetWeeks - 1) * 7, 0, 0, 0);
+    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - diffToSunday + (offsetWeeks * 7), 0, 0, 0);
     const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
 
     return { start, end };
