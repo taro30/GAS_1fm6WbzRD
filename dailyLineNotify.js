@@ -1,16 +1,19 @@
 /**
  * @fileoverview 日次LINE通知プログラム
- * その日の活動実績（カテゴリー別件数・時間）をDBシートから集計し、
+ * 前日の活動実績（カテゴリー別件数・時間）をDBシートから集計し、
  * LINE Messaging APIを使用して通知します。
  */
 
 /**
- * 【メイン関数】その日のカテゴリー別統計をLINEに通知します。
- * 毎日 23:00〜など、一日の終わりに実行するトリガー設定を想定しています。
+ * 【メイン関数】前日のカテゴリー別統計をLINEに通知します。
+ * 毎朝 5:00 に前日の実績をブロードキャストすることを想定しています。
  */
 function dailyLineNotify() {
     try {
-        const today = new Date();
+        const now = new Date();
+        // 前日の日付を取得
+        const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+
         const sheetName = 'DB';
 
         // 1. スプレッドシートデータの取得
@@ -21,27 +24,27 @@ function dailyLineNotify() {
         const allRows = dbSheet.getDataRange().getValues();
         if (allRows.length <= 1) return;
 
-        // 2. 本日のイベントのみを抽出
-        // 時刻を00:00:00にリセットした比較用の日付を作成
-        const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0);
-        const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+        // 2. 前日のイベントのみを抽出
+        // 時刻を00:00:00と23:59:59に設定した範囲を作成
+        const startOfDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0);
+        const endOfDate = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999);
 
-        const todayEvents = [];
+        const yesterdayEvents = [];
         for (let i = 1; i < allRows.length; i++) {
             const row = allRows[i];
             if (row.length < 6) continue;
 
             const eventDate = new Date(row[5]); // F列: 日付
-            if (!isNaN(eventDate.getTime()) && eventDate >= startOfToday && eventDate <= endOfToday) {
-                todayEvents.push({
+            if (!isNaN(eventDate.getTime()) && eventDate >= startOfDate && eventDate <= endOfDate) {
+                yesterdayEvents.push({
                     title: String(row[0]),      // A列: タイトル
                     durationSerial: row[3]      // D列: 所要時間
                 });
             }
         }
 
-        if (todayEvents.length === 0) {
-            console.log("本日のデータはまだ記録されていません。");
+        if (yesterdayEvents.length === 0) {
+            console.log("前日のデータは見つかりませんでした。");
             return;
         }
 
@@ -49,7 +52,7 @@ function dailyLineNotify() {
         const stats = {};
         let totalDayHours = 0;
 
-        todayEvents.forEach(ev => {
+        yesterdayEvents.forEach(ev => {
             const match = ev.title.match(/【(.*?)】/);
             if (match) {
                 const cat = match[1];
@@ -69,8 +72,8 @@ function dailyLineNotify() {
         });
 
         // 4. LINEメッセージの構築
-        const dateStr = Utilities.formatDate(today, 'JST', 'yyyy/MM/dd(E)');
-        let message = `【本日の活動実績】\n📅 ${dateStr}\n\n`;
+        const dateStr = Utilities.formatDate(yesterday, 'JST', 'yyyy/MM/dd(E)');
+        let message = `【昨日の活動実績】\n📅 ${dateStr}\n\n`;
 
         // 時間の長い順に並び替え
         const sortedCats = Object.keys(stats).sort((a, b) => stats[b].hours - stats[a].hours);
@@ -81,7 +84,7 @@ function dailyLineNotify() {
         });
 
         message += `\n合計記録時間: ${totalDayHours.toFixed(1)}h\n`;
-        message += `今日もお疲れ様でした！`;
+        message += `今日も一日、充実した日になりますように！`;
 
         // 5. LINE送信
         sendLineMessage(message);
