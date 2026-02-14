@@ -30,8 +30,9 @@ function sendWeeklyReport() {
         const aiCommentary = getGeminiCommentary(comparison);
 
         // 5. Send Email
-        const dateStr = `${Utilities.formatDate(thisWeekRange.start, 'JST', 'yyyy/MM/dd')}–${Utilities.formatDate(thisWeekRange.end, 'JST', 'yyyy/MM/dd')}`;
-        const subject = `【週次レポート】${dateStr} カレンダー集計`;
+        const dateStr = `${Utilities.formatDate(thisWeekRange.start, 'JST', 'yyyy/MM/dd')} - ${Utilities.formatDate(thisWeekRange.end, 'JST', 'yyyy/MM/dd')}`;
+        // Emoji usage is restricted to avoid ??? issues in some environments.
+        const subject = `[週次レポート] ${dateStr} カレンダー集計`;
 
         sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateStr);
 
@@ -58,7 +59,6 @@ function getWeeklyDateRange(refDate, offsetWeeks) {
 /**
  * Aggregates category counts and cumulative hours from 'DB' sheet.
  * Filters for categories enclosed in 【】.
- * @return {Object} { categoryName: { count: number, durationHours: number } }
  */
 function aggregateWeeklyStats(sheet, start, end) {
     const data = sheet.getDataRange().getValues();
@@ -67,17 +67,19 @@ function aggregateWeeklyStats(sheet, start, end) {
     for (let i = 1; i < data.length; i++) {
         const row = data[i];
         if (row.length < 6) continue;
-        const title = String(row[0]); // Col A: Title
-        const eventDate = new Date(row[5]); // Col F: Date
-        const durationRaw = row[3]; // Col D: Duration (Time object or number)
+        const title = String(row[0]);
+        const eventDate = new Date(row[5]);
+        const durationRaw = row[3];
 
-        // Extract category from 【】
         const match = title.match(/【(.*?)】/);
         if (match && eventDate >= start && eventDate <= end) {
             const category = match[1];
-            const durationHours = (durationRaw instanceof Date)
-                ? (durationRaw.getHours() + durationRaw.getMinutes() / 60 + durationRaw.getSeconds() / 3600)
-                : (typeof durationRaw === 'number' ? durationRaw * 24 : 0); // Serial to hours if numeric
+            let durationHours = 0;
+            if (durationRaw instanceof Date) {
+                durationHours = durationRaw.getHours() + (durationRaw.getMinutes() / 60);
+            } else if (typeof durationRaw === 'number') {
+                durationHours = durationRaw * 24;
+            }
 
             if (!stats[category]) {
                 stats[category] = { count: 0, duration: 0 };
@@ -118,21 +120,18 @@ function compareWeeklyStats(current, previous) {
  */
 function generateStackedDailyChart(sheet, start, end) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const tmpSheetName = `_tmp_chart_${new Date().getTime()}`;
+    const tmpSheetName = `ChartData_${new Date().getTime()}`;
     const tmpSheet = ss.insertSheet(tmpSheetName);
 
     try {
         const data = sheet.getDataRange().getValues();
-        if (data.length <= 1) return null;
-
         const categoriesSet = new Set();
-        const dailyData = {}; // { MM/dd: { category: duration } }
+        const dailyMap = {}; // { MM/dd: { category: duration } }
 
-        // 1. Collect Categories and Daily Totals (Dynamically from data)
+        // 1. Data Collection
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
             if (row.length < 6) continue;
-
             const title = String(row[0]);
             const eventDate = new Date(row[5]);
             const durationRaw = row[3];
@@ -142,60 +141,60 @@ function generateStackedDailyChart(sheet, start, end) {
             const match = title.match(/【(.*?)】/);
             if (match && eventDate >= start && eventDate <= end) {
                 const cat = match[1];
-                const dateStr = Utilities.formatDate(eventDate, 'JST', 'MM/dd');
+                const dateKey = Utilities.formatDate(eventDate, 'JST', 'MM/dd');
 
-                let durationHours = 0;
+                let dur = 0;
                 if (durationRaw instanceof Date) {
-                    durationHours = durationRaw.getHours() + (durationRaw.getMinutes() / 60);
+                    dur = durationRaw.getHours() + (durationRaw.getMinutes() / 60);
                 } else if (typeof durationRaw === 'number') {
-                    durationHours = durationRaw * 24;
+                    dur = durationRaw * 24;
                 }
 
                 categoriesSet.add(cat);
-                if (!dailyData[dateStr]) dailyData[dateStr] = {};
-                dailyData[dateStr][cat] = (dailyData[dateStr][cat] || 0) + durationHours;
+                if (!dailyMap[dateKey]) dailyMap[dateKey] = {};
+                dailyMap[dateKey][cat] = (dailyMap[dateKey][cat] || 0) + dur;
             }
         }
 
         const categories = Array.from(categoriesSet).sort();
         if (categories.length === 0) return null;
 
-        const header = ["Date", ...categories];
+        const header = ["日付", ...categories];
         const rows = [];
 
-        // 2. Prepare grid for chart (7 days)
+        // 2. Filling 7 days grid
         for (let i = 0; i < 7; i++) {
-            const d = new Date(start.getTime());
-            d.setDate(d.getDate() + i);
-            const ds = Utilities.formatDate(d, 'JST', 'MM/dd');
+            const currentDay = new Date(start.getTime());
+            currentDay.setDate(currentDay.getDate() + i);
+            const ds = Utilities.formatDate(currentDay, 'JST', 'MM/dd');
             const row = [ds];
             categories.forEach(cat => {
-                row.push(dailyData[ds] ? (dailyData[ds][cat] || 0) : 0);
+                row.push(dailyMap[ds] ? (dailyMap[ds][cat] || 0) : 0);
             });
             rows.push(row);
         }
 
+        // Write to temporary sheet
         tmpSheet.getRange(1, 1, 1, header.length).setValues([header]);
         tmpSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
 
-        const dataRange = tmpSheet.getRange(1, 1, rows.length + 1, header.length);
-
-        // 3. Create Stacked Column Chart
+        // 3. Create Chart
         const chart = tmpSheet.newChart()
             .setChartType(Charts.ChartType.COLUMN)
-            .addRange(dataRange)
+            .addRange(tmpSheet.getRange(1, 1, rows.length + 1, header.length))
             .setOption('isStacked', true)
-            .setOption('title', 'Weekly Activity Allocation (Hours)')
-            .setOption('hAxis.title', 'Day')
-            .setOption('vAxis.title', 'Hours')
-            .setOption('legend', { position: 'right' })
-            .setOption('backgroundColor', '#ffffff')
+            .setOption('title', '日次カテゴリー別時間配分 (h)')
+            .setOption('hAxis', { title: '日付' })
+            .setOption('vAxis', { title: '時間 (h)' })
+            .setOption('width', 600)
+            .setOption('height', 400)
+            .setOption('legend', { position: 'bottom' })
             .build();
 
-        return chart.getAs('image/png').setName('weekly_activity_chart.png');
+        return chart.getAs('image/png').setName('daily_chart.png');
 
     } catch (err) {
-        console.error("Chart Generation Error: " + err.message);
+        console.error("Chart Error: " + err.message);
         return null;
     } finally {
         ss.deleteSheet(tmpSheet);
@@ -203,19 +202,23 @@ function generateStackedDailyChart(sheet, start, end) {
 }
 
 /**
- * Calls Gemini for commentary (Increasing length to 200-300 chars).
+ * Calls Gemini for detailed commentary.
  */
 function getGeminiCommentary(comparison) {
     const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
     if (!apiKey) return "※AI寸評はAPIキー未設定のためスキップされました。";
 
     const endpoint = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const prompt = `あなたは生活習慣の分析をサポートするAIです。
-以下のカレンダー集計データ（今週の件数・累計時間・前週比）を見て、傾向や示唆を【250文字〜300文字程度のボリューム】で、詳しく日本語で述べてください。
-単なる数値の羅列ではなく、活動のバランスや変化から読み取れるライフスタイルの傾向を、優しく寄り添うトーンで分析してください。
-断定や強い評価は避け、「〜の傾向が見られます」「〜が示唆されます」といった表現を使ってください。
+    const prompt = `あなたは生活習慣の分析をサポートするライフログ専門のAIです。
+以下のカレンダー集計データを見て、傾向と今後の示唆を【300文字〜400文字程度】で、詳しく日本語で述べてください。
 
-データ:
+ポイント：
+- 活動件数と、特に「時間（h）」の増減に着目してください。
+- 各カテゴリーのバランス（仕事、休憩、自己研鑽など）から、現在のライフスタイルの質を分析してください。
+- 改善点や、継続すべき良い傾向があれば優しくアドバイスしてください。
+- 「〜の傾向が見られます」「〜が示唆されます」といった丁寧なトーンで記述してください。
+
+集計データ:
 ${JSON.stringify(comparison)}
 `;
 
@@ -228,7 +231,7 @@ ${JSON.stringify(comparison)}
 }
 
 /**
- * Sends HTML Email (Removed emojis to prevent ???? issue).
+ * Sends formatted HTML Email.
  */
 function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) {
     const userEmail = Session.getActiveUser().getEmail();
@@ -236,35 +239,41 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
     let tableRows = "";
     comparison.forEach(item => {
         const diffDur = item.diffDuration.toFixed(1);
-        const diffColor = item.diffDuration > 0 ? "blue" : (item.diffDuration < 0 ? "red" : "black");
+        const diffColor = item.diffDuration > 0 ? "#4285F4" : (item.diffDuration < 0 ? "#EA4335" : "#333");
         const durStr = item.currentDuration.toFixed(1);
 
         tableRows += `
       <tr>
-        <td style="border: 1px solid #ddd; padding: 8px;">【${item.category}】</td>
-        <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${item.currentCount}回</td>
-        <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${durStr}h</td>
-        <td style="border: 1px solid #ddd; padding: 8px; text-align: center; color: ${diffColor};">${diffDur > 0 ? '+' + diffDur : diffDur}h</td>
+        <td style="border: 1px solid #ddd; padding: 10px; font-weight: bold;">【${item.category}】</td>
+        <td style="border: 1px solid #ddd; padding: 10px; text-align: center;">${item.currentCount}回</td>
+        <td style="border: 1px solid #ddd; padding: 10px; text-align: center;">${durStr}h</td>
+        <td style="border: 1px solid #ddd; padding: 10px; text-align: center; color: ${diffColor};">${item.diffDuration > 0 ? '+' : ''}${diffDur}h</td>
       </tr>`;
     });
 
-    const inlineImages = chartBlob ? { chart: chartBlob } : {};
-    const attachments = chartBlob ? [chartBlob] : [];
-    const chartImgTag = chartBlob ? `<div style="margin-top: 25px;"><img src="cid:chart" style="width: 100%; max-width: 600px; border: 1px solid #eee; border-radius: 8px;" /></div>` : "";
+    // Handle inline image
+    const inlineImages = {};
+    let chartHtml = "";
+    if (chartBlob) {
+        inlineImages['chart'] = chartBlob;
+        chartHtml = `<div style="margin: 30px 0; text-align: center;"><img src="cid:chart" style="width: 100%; max-width: 600px; border: 1px solid #eee; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" /></div>`;
+    }
 
     const htmlBody = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; color: #333;">
-      <h2 style="color: #4285F4; border-bottom: 2px solid #4285F4; padding-bottom: 10px;">Weekly Life Log Report</h2>
-      <p style="font-weight: bold;">[Target Period] <span style="color: #555;">${dateRange}</span></p>
+    <div style="font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif; max-width: 650px; margin: 0 auto; padding: 20px; border: 1px solid #f0f0f0; background-color: #ffffff; color: #333;">
+      <h2 style="color: #4285F4; border-left: 6px solid #4285F4; padding: 10px 15px; background-color: #f8f9fa;">週次ライフログ・レポート</h2>
+      <p style="margin: 20px 0; font-size: 1.1em;">
+        <strong>[対象期間]</strong> ${dateRange}
+      </p>
       
-      <h3>(Summary) Activity Statistics</h3>
-      <table style="border-collapse: collapse; width: 100%; border: 1px solid #ddd;">
+      <h3 style="border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 30px;">(集計) カテゴリー別統計</h3>
+      <table style="border-collapse: collapse; width: 100%; margin-top: 15px; font-size: 0.95em;">
         <thead>
-          <tr style="background-color: #f8f9fa; border-bottom: 2px solid #ddd;">
-            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Category</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">Count</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">Total Time</th>
-            <th style="padding: 10px; border: 1px solid #ddd;">Vs Prev Week</th>
+          <tr style="background-color: #f2f2f2;">
+            <th style="border: 1px solid #ddd; padding: 12px; text-align: left;">カテゴリー</th>
+            <th style="border: 1px solid #ddd; padding: 12px;">回数</th>
+            <th style="border: 1px solid #ddd; padding: 12px;">累計時間</th>
+            <th style="border: 1px solid #ddd; padding: 12px;">前週比</th>
           </tr>
         </thead>
         <tbody>
@@ -272,17 +281,16 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
         </tbody>
       </table>
 
-      ${chartImgTag}
+      ${chartHtml}
 
-      <h3 style="margin-top: 30px;">
-        AI Insight (Gemini)
-      </h3>
-      <div style="background-color: #f1f3f4; padding: 20px; border-radius: 8px; border-left: 6px solid #4285F4; line-height: 1.6;">
-        ${aiCommentary.replace(/\n/g, '<br>')}
+      <h3 style="border-bottom: 2px solid #eee; padding-bottom: 5px; margin-top: 40px;">AI Insight (Gemini)</h3>
+      <div style="background-color: #f1f3f4; padding: 25px; border-radius: 12px; border-left: 8px solid #4285F4; margin-top: 15px; line-height: 1.8; font-size: 1em; white-space: pre-wrap;">
+${aiCommentary}
       </div>
 
-      <footer style="margin-top: 40px; padding-top: 10px; border-top: 1px solid #eee; font-size: 0.8em; color: #888; text-align: center;">
-        This email is automatically generated. Have a great day!
+      <footer style="margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee; font-size: 0.85em; color: #777; text-align: center;">
+        このメールは自動送信されています。本日も充実した一日を過ごしましょう。<br>
+        &copy; Living Log Service
       </footer>
     </div>
   `;
@@ -290,7 +298,7 @@ function sendHtmlEmail(subject, comparison, aiCommentary, chartBlob, dateRange) 
     GmailApp.sendEmail(userEmail, subject, "", {
         htmlBody: htmlBody,
         inlineImages: inlineImages,
-        attachments: attachments
+        attachments: chartBlob ? [chartBlob] : []
     });
 }
 
