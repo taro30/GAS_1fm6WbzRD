@@ -122,28 +122,28 @@ function generateStackedDailyChart(sheet, start, end) {
 
     try {
         const data = sheet.getDataRange().getValues();
-        if (data.length <= 1) return null; // No data
+        if (data.length <= 1) return null;
 
-        const categoriesSet = new Set();
+        // User defined categories from spreadsheet/chart legend
+        const categories = ["休憩", "雑務・MTG", "生活", "仕事", "インプット", "アウトプット", "中小"];
         const dailyData = {}; // { MM/dd: { category: duration } }
 
-        // 1. Collect Categories and Daily Totals
+        // 1. Collect Daily Totals for target categories
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
-            if (row.length < 6) continue; // Skip rows that don't reach Column F (Date)
+            if (row.length < 6) continue;
 
             const title = String(row[0]);
             const eventDate = new Date(row[5]);
             const durationRaw = row[3];
 
-            if (isNaN(eventDate.getTime())) continue; // Skip invalid dates
+            if (isNaN(eventDate.getTime())) continue;
 
             const match = title.match(/【(.*?)】/);
             if (match && eventDate >= start && eventDate <= end) {
                 const cat = match[1];
                 const dateStr = Utilities.formatDate(eventDate, 'JST', 'MM/dd');
 
-                // Duration calculation (handling both Time object and Serial number)
                 let durationHours = 0;
                 if (durationRaw instanceof Date) {
                     durationHours = durationRaw.getHours() + (durationRaw.getMinutes() / 60);
@@ -151,14 +151,10 @@ function generateStackedDailyChart(sheet, start, end) {
                     durationHours = durationRaw * 24;
                 }
 
-                categoriesSet.add(cat);
                 if (!dailyData[dateStr]) dailyData[dateStr] = {};
                 dailyData[dateStr][cat] = (dailyData[dateStr][cat] || 0) + durationHours;
             }
         }
-
-        const categories = Array.from(categoriesSet);
-        if (categories.length === 0) return null; // No categories found, skip chart
 
         const header = ["Date", ...categories];
         const rows = [];
@@ -175,20 +171,25 @@ function generateStackedDailyChart(sheet, start, end) {
             rows.push(row);
         }
 
-        // Write data to tmp sheet
+        // Write data explicitly
         tmpSheet.getRange(1, 1, 1, header.length).setValues([header]);
         tmpSheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+
+        // Final check on written data range
+        const dataRange = tmpSheet.getRange(1, 1, rows.length + 1, header.length);
 
         // 3. Create Stacked Column Chart
         const chart = tmpSheet.newChart()
             .setChartType(Charts.ChartType.COLUMN)
-            .addRange(tmpSheet.getRange(1, 1, rows.length + 1, header.length))
+            .addRange(dataRange)
             .setOption('isStacked', true)
             .setOption('title', 'Weekly Activity Allocation (Hours)')
             .setOption('hAxis.title', 'Day')
             .setOption('vAxis.title', 'Hours')
             .setOption('legend', { position: 'right' })
             .setOption('backgroundColor', '#fdfdfd')
+            // Match spreadsheet colors as much as possible
+            .setOption('colors', ['#4285F4', '#993300', '#F4E7B1', '#673AB7', '#00C853', '#FF9800', '#FF5722'])
             .build();
 
         return chart.getAs('image/png').setName('weekly_activity_chart.png');
