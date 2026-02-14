@@ -403,7 +403,7 @@ function getWeeklyDateRange(refDate, offsetWeeks) {
     const day = d.getDay(); // 0:日, 6:土
 
     // 本日が日曜(0)なら7日前を、それ以外ならその週の日曜を特定します
-    const diffToCurrentSunday = (day === 0) ? 7 : day;
+    const diffToSunday = (day === 0) ? 7 : day;
 
     // 基準となる週の日曜日
     const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() - diffToSunday + (offsetWeeks * 7), 0, 0, 0);
