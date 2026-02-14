@@ -9,6 +9,10 @@
 function sendWeeklyReport() {
     try {
         const now = new Date();
+        // レポートが日曜朝に走ることを想定し、
+        // 今週 = 「先週の日曜 ～ 昨日の土曜」
+        // 前週 = 「先々週の日曜 ～ 先々週の土曜」
+        // として計算します。
         const thisWeek = getWeeklyDateRange(now, 0);
         const lastWeek = getWeeklyDateRange(now, -1);
 
@@ -88,6 +92,7 @@ function aggregateStats(events) {
                 h = ev.duration * 24;
             }
             res[cat].count++;
+            res[res[cat].hours === undefined ? (res[cat].hours = 0) : null];
             res[cat].hours += h;
         }
     });
@@ -104,7 +109,7 @@ function calculateIOMetrics(stats) {
     Object.keys(stats).forEach(cat => {
         if (cat.includes("インプット")) {
             inputHours += stats[cat].hours;
-        } else if (cat.includes("アウトプット") || cat === "中小") { // 「中小」もアウトプット活動とみなす（必要に応じて調整）
+        } else if (cat.includes("アウトプット") || cat === "中小") {
             outputHours += stats[cat].hours;
         }
     });
@@ -119,7 +124,7 @@ function calculateIOMetrics(stats) {
 }
 
 /**
- * グラフ用の画像生成 (シートを使わない方式)
+ * グラフ用の画像生成
  */
 function createChartImage(events, weekStart) {
     const dailyData = {};
@@ -179,12 +184,12 @@ function getGeminiAnalysis(comparison, ioMetrics) {
 
     const endpoint = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=" + key;
     const prompt = `あなたはライフログ分析のプロフェッショナルAIです。
-以下の集計データ（活動構成比、インプット/アウトプット比率含む）を多角的に分析し、ユーザーの今週の生活リズムと質の変化について【350文字〜450文字程度】で詳しく日本語のアドバイスを記述してください。
+以下の集計データ（活動構成比、インプット/アウトプット比率、前週比較）を多角的に分析し、ユーザーの今週の生活リズムと質の変化について【350文字〜450文字程度】で詳しく日本語のアドバイスを記述してください。
 
-特に以下の3点に触れてください：
-1. 全体時間に対する各カテゴリーの構成比から、時間の使い方の「偏り」や「理想とのギャップ」を考察。
-2. インプット(${ioMetrics.inputRatio}%) vs アウトプット(${ioMetrics.outputRatio}%)の比率に対する専門的な洞察（黄金比3:7等と比較）。
-3. 前週比データから読み取れる、ユーザーのポジティブな変化や改善に向けた具体的なアクション案。
+特に以下の点を踏まえてください：
+- 各カテゴリーの構成比から、時間の使い方のバランス。
+- インプット(${ioMetrics.inputRatio}%) vs アウトプット(${ioMetrics.outputRatio}%)の比率に対する洞察。
+- 前週比データから見える改善点や、来週に向けた具体的な提案。
 
 データ: ${JSON.stringify({ comparison, ioMetrics })}`;
 
@@ -200,7 +205,7 @@ function getGeminiAnalysis(comparison, ioMetrics) {
 }
 
 /**
- * データ比較および構成比の算出
+ * データ比較
  */
 function buildComparison(thisStats, lastStats) {
     const keys = new Set([...Object.keys(thisStats), ...Object.keys(lastStats)]);
@@ -250,12 +255,12 @@ function sendHtmlEmail(subject, comparison, ioMetrics, aiText, chartBlob, dateRa
       <p style="font-size:1.1em; margin-bottom: 25px;">[対象期間] ${dateRange}</p>
       
       <div style="background:#f8f9fa; padding:15px; border-radius:8px; margin-bottom:30px; border-left:5px solid #FF9800;">
-        <h4 style="margin:0 0 10px 0; color:#E65100;">■ インプット・アウトプット比率</h4>
+        <h4 style="margin:0 0 10px 0; color:#E65100;">● インプット・アウトプット比率</h4>
         目指せ 黄金比 3:7<br>
         <span style="font-size:1.2em; font-weight:bold;">インプット ${ioMetrics.inputRatio}% (${ioMetrics.inputHours.toFixed(1)}h) : アウトプット ${ioMetrics.outputRatio}% (${ioMetrics.outputHours.toFixed(1)}h)</span>
       </div>
 
-      <h3 style="background:#f8f9fa;padding:10px;border-left:5px solid #ccc;margin-top:25px;">● カテゴリー別実績 (構成比含む)</h3>
+      <h3 style="background:#f8f9fa;padding:10px;border-left:5px solid #ccc;margin-top:25px;">● カテゴリー別実績 (構成比)</h3>
       <table style="border-collapse:collapse;width:100%;margin-top:10px; font-size:0.95em;">
         <tr style="background:#eee;"><th style="border:1px solid #ddd;padding:12px;text-align:left;">カテゴリー</th><th>回数</th><th>時間(構成比)</th><th>前週比</th></tr>
         ${table}
@@ -264,7 +269,7 @@ function sendHtmlEmail(subject, comparison, ioMetrics, aiText, chartBlob, dateRa
       <h3 style="background:#f8f9fa;padding:10px;border-left:5px solid #4285F4;margin-top:40px;">■ AI Insight (Gemini)</h3>
       <div style="background:#f4f6f8;padding:20px;border-radius:10px;margin-top:15px;white-space:pre-wrap;">${aiText}</div>
       <footer style="margin-top:50px;font-size:0.85em;color:#888;text-align:center;border-top:1px solid #eee;padding-top:20px;">
-         自動生成メールです。本日も充実した一日をお過ごしください。
+         自動生成されたレポートです。
       </footer>
     </div>`;
 
@@ -275,12 +280,21 @@ function sendHtmlEmail(subject, comparison, ioMetrics, aiText, chartBlob, dateRa
     });
 }
 
-function getWeeklyDateRange(ref, offset) {
-    const d = new Date(ref.getTime());
-    const day = d.getDay();
-    const diff = (day === 0 ? -6 : 1 - day);
-    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff + (offset * 7), 0, 0, 0);
+/**
+ * 集計期間の計算 (日曜日始まり・土曜日終わり)
+ */
+function getWeeklyDateRange(refDate, offsetWeeks) {
+    const d = new Date(refDate.getTime());
+    const day = d.getDay(); // 0: 日, 1: 月...
+
+    // 今週の日曜日の日付を取得
+    const todaySunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - day, 0, 0, 0);
+
+    // offsetWeeks = 0 のとき「直近の完結した一週間（先週の日曜～昨日の土曜）」
+    // 日曜に実行された場合、todaySunday = 今日。そこから -7日して先週の日曜を始点にする。
+    const start = new Date(todaySunday.getFullYear(), todaySunday.getMonth(), todaySunday.getDate() + (offsetWeeks - 1) * 7, 0, 0, 0);
     const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
+
     return { start, end };
 }
 
