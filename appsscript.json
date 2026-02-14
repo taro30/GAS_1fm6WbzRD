@@ -1,0 +1,23 @@
+{
+  "timeZone": "Asia/Tokyo",
+  "dependencies": {
+  },
+  "webapp": {
+    "access": "MYSELF",
+    "executeAs": "USER_DEPLOYING"
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "sheets": {
+    "macros": [{
+      "menuName": "getLastRow",
+      "functionName": "getLastRow"
+    }, {
+      "menuName": "addCalendarDayEvents",
+      "functionName": "addCalendarDayEvents"
+    }, {
+      "menuName": "addCalendarDayEvents2",
+      "functionName": "addCalendarDayEvents2"
+    }]
+  }
+}
