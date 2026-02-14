@@ -135,7 +135,7 @@ function sendLineMessage(text) {
 }
 
 /**
- * 毎日23時ごろに実行するトリガーを作成
+ * 毎日午前5時ごろに実行するトリガーを作成
  */
 function createDailyLineTrigger() {
     const handler = 'dailyLineNotify';
@@ -145,8 +145,8 @@ function createDailyLineTrigger() {
     ScriptApp.newTrigger(handler)
         .timeBased()
         .everyDays(1)
-        .atHour(23)
+        .atHour(5)
         .create();
 
-    console.log("日次LINE通知のトリガーを設定しました（毎日 23:00）。");
+    console.log("日次LINE通知のトリガーを設定しました（毎日 05:00）。");
 }
